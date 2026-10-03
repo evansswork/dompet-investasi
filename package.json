@@ -1,0 +1,7 @@
+{
+  "name": "dompet-investasi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tracker portofolio pribadi: crypto, saham ID, saham US, emas, RDPU.",
+  "engines": { "node": ">=18" }
+}
