@@ -324,11 +324,14 @@ dialog::backdrop{background:rgba(8,14,24,.5)}
     <div class="formgrid">
       <label class="field"><span id="lSym">Kode</span><input class="inp" id="fSym" list="dlSym" required></label>
       <label class="field"><span>Tanggal</span><input class="inp" id="fDate" type="date" required></label>
-      <label class="field"><span id="lQty">Jumlah</span><input class="inp" id="fQty" inputmode="decimal" required><span class="hint" id="hQty"></span></label>
-      <label class="field"><span id="lPrice">Harga</span><input class="inp" id="fPrice" inputmode="decimal" required><span class="hint">Desimal pakai koma, mis. 0,45</span></label>
+      <label class="field" id="qtyWrap"><span id="lQty">Jumlah</span><input class="inp" id="fQty" inputmode="decimal" required><span class="hint" id="hQty"></span></label>
+      <label class="field" id="priceWrap"><span id="lPrice">Harga</span><input class="inp" id="fPrice" inputmode="decimal" required><span class="hint">Desimal pakai koma, mis. 0,45</span></label>
+      <label class="field" id="dpsWrap" style="display:none"><span id="lDps">Dividen per lembar</span><input class="inp" id="fDps" inputmode="decimal" placeholder="mis. 250"><span class="hint" id="hDps"></span></label>
+      <label class="field" id="taxWrap" style="display:none"><span>Pajak dipotong (%)</span><input class="inp" id="fTax" inputmode="decimal" placeholder="0"><span class="hint" id="hTax"></span></label>
+      <label class="field full" id="divWrap" style="display:none"><span id="lDiv">Total diterima, bersih</span><input class="inp" id="fDiv" inputmode="decimal" placeholder="mis. 225.000"><span class="hint">Jumlah yang benar-benar masuk ke rekening. Terisi otomatis dari dividen per lembar, atau isi langsung.</span></label>
       <label class="field"><span>Uang siapa</span><input class="inp" id="fOwner" list="dlOwner" placeholder="mis. Saya, Istri, Ayah"></label>
       <label class="field"><span>Platform</span><input class="inp" id="fPlat" list="dlPlat" placeholder="mis. Binance"></label>
-      <label class="field"><span id="lFee">Fee</span><input class="inp" id="fFee" inputmode="decimal" placeholder="0"><span class="hint" id="hFee"></span></label>
+      <label class="field" id="feeWrap"><span id="lFee">Fee</span><input class="inp" id="fFee" inputmode="decimal" placeholder="0"><span class="hint" id="hFee"></span></label>
       <label class="field" id="levWrap"><span>Leverage (x)</span><input class="inp" id="fLev" inputmode="decimal" value="10"></label>
       <label class="field full"><span>Catatan (opsional)</span><input class="inp" id="fNote" placeholder="mis. DCA bulanan, beli saat koreksi"></label>
     </div>
@@ -506,7 +509,8 @@ function compute(owner){
       const k=[t.cls,t.owner,t.sym].join("|");
       const p=pos[k]||(pos[k]={key:k,cls:t.cls,sym:t.sym,owner:t.owner,qty:0,cost:0,realized:0,plats:new Set()});
       if(t.platform) p.plats.add(t.platform);
-      if(t.act==="buy"){ p.qty+=t.qty; p.cost+=t.qty*t.price+fee; txPnl[t.id]=null; }
+      if(t.act==="div"){ const am=+t.amt||0; p.realized+=am; p.div=(p.div||0)+am; events.push({date:t.date,cls:t.cls,v:am}); txPnl[t.id]=am; }
+      else if(t.act==="buy"){ p.qty+=t.qty; p.cost+=t.qty*t.price+fee; txPnl[t.id]=null; }
       else {
         const q=Math.min(t.qty,p.qty), avg=p.qty>0?p.cost/p.qty:0, pnl=(t.price-avg)*q-fee;
         p.cost-=avg*q; p.qty-=q; p.realized+=pnl; if(p.qty<1e-12){p.qty=0;p.cost=0;}
@@ -515,7 +519,7 @@ function compute(owner){
     }
   }
   const list=Object.values(pos);
-  const byCls={}; ORDER.forEach(c=>byCls[c]={invested:0,value:0,floating:0,realized:0,open:0});
+  const byCls={}; ORDER.forEach(c=>byCls[c]={invested:0,value:0,floating:0,realized:0,open:0,div:0});
   for(const p of list){
     const cur=CLS[p.cls].cur, pr=state.prices[pkey(p.cls,p.sym)];
     p.cur=cur; p.price=pr&&isFinite(pr.p)?pr.p:null; p.priceAt=pr?pr.at:0;
@@ -530,6 +534,7 @@ function compute(owner){
     p.stale=p.qty>0&&(p.price==null||Date.now()-p.priceAt>864e5);
     const a=byCls[p.cls];
     a.invested+=toIDR(p.qty>0?p.invested:0,p.cls); a.value+=toIDR(p.value,p.cls); a.floating+=toIDR(p.floating,p.cls); a.realized+=toIDR(p.realized,p.cls);
+    a.div+=toIDR(p.div||0,p.cls);
     if(p.qty>0) a.open++;
   }
   let modal=0; state.ledger.forEach(l=>{ if(owner==="all"||l.owner===owner) modal+= l.type==="out"?-l.amt:l.amt; });
@@ -538,7 +543,7 @@ function compute(owner){
   return {list,byCls,events,txPnl,modal,invested,value,floating,realized,kas:modal+realized-invested,equity:modal+realized+floating};
 }
 function group(C, clsList){
-  const g={invested:0,value:0,floating:0,realized:0,open:0}; clsList.forEach(c=>{ const a=C.byCls[c]; for(const k in g) g[k]+=a[k]; }); return g;
+  const g={invested:0,value:0,floating:0,realized:0,open:0,div:0}; clsList.forEach(c=>{ const a=C.byCls[c]; for(const k in g) g[k]+=a[k]; }); return g;
 }
 
 /* ================= render ================= */
@@ -587,6 +592,7 @@ function renderDash(){
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" data-view="modal">Catat modal pertama</button><button class="btn" data-act="demo">Lihat contoh dulu</button></div>
     </div>`; return;
   }
+  const totalDiv=ORDER.reduce((x,c)=>x+C.byCls[c].div,0);
   const pl = C.realized+C.floating, ret = C.modal>0 ? pl/C.modal*100 : NaN;
   // donut
   const segs=[]; ORDER.forEach(c=>{ const v=C.byCls[c].value; if(v>0) segs.push({v,color:CLS[c].color,name:CLS[c].short}); });
@@ -634,7 +640,7 @@ function renderDash(){
       </div>
       <div class="stats">
         <div class="stat"><div class="k">Floating</div><div class="v ${tone(C.floating)}">${idrS(C.floating)}</div><div class="h">Belum dijual, masih bergerak</div></div>
-        <div class="stat"><div class="k">Realized</div><div class="v ${tone(C.realized)}">${idrS(C.realized)}</div><div class="h">Sudah dikunci (jual/tutup)</div></div>
+        <div class="stat"><div class="k">Realized</div><div class="v ${tone(C.realized)}">${idrS(C.realized)}</div><div class="h">${totalDiv>0?"Termasuk dividen "+idrS(totalDiv):"Sudah dikunci (jual/tutup)"}</div></div>
         <div class="stat"><div class="k">Kas tersedia</div><div class="v">${idr(C.kas)}</div>${kasNote}</div>
       </div>
     </div>
@@ -771,6 +777,7 @@ function renderClassView(v){
       <div><h1>${isCrypto?"Crypto":CLS[cls].name}</h1><p>${sub}${ownerLabel()}</p></div>
       <div class="page-actions">
         ${openCount?`<button class="btn" data-act="prices" data-cls="${cls}">Update harga${stale?` <span class="pill" style="background:var(--warn);color:#fff">${stale}</span>`:""}</button>`:""}
+        ${(cls==="idx"||cls==="us")&&openCount?`<button class="btn" data-act="new-div" data-cls="${cls}">Catat dividen</button>`:""}
         <button class="btn primary" data-act="new-tx" data-cls="${cls}">+ Tambah transaksi</button>
       </div>
     </div>
@@ -780,7 +787,7 @@ function renderClassView(v){
       <div class="stat"><div class="k">Nilai sekarang</div><div class="v">${idr(g.value)}</div><div class="h">${openCount} posisi aktif</div></div>
       <div class="stat"><div class="k">${cls==="fut"?"Margin terpakai":"Modal di posisi"}</div><div class="v">${idr(g.invested)}</div><div class="h">termasuk fee beli</div></div>
       <div class="stat"><div class="k">Floating</div><div class="v ${tone(g.floating)}">${idrS(g.floating)}</div><div class="h">${g.invested>0?pct(g.floating/g.invested*100):"—"}</div></div>
-      <div class="stat"><div class="k">Realized</div><div class="v ${tone(g.realized)}">${idrS(g.realized)}</div><div class="h">dari jual/tutup posisi</div></div>
+      <div class="stat"><div class="k">Realized</div><div class="v ${tone(g.realized)}">${idrS(g.realized)}</div><div class="h">${g.div>0?"termasuk dividen "+idrS(g.div):"dari jual/tutup posisi"}</div></div>
     </div>
     <div class="toolbar"><h2>${cls==="fut"?"Posisi terbuka":"Aset yang dimiliki"}</h2>${hasClosed?`<label class="check"><input type="checkbox" data-act="toggle-closed" ${ui.showClosed?"checked":""}> Tampilkan yang sudah terjual</label>`:""}</div>
     <div class="list">${pos.length?pos.map(holdRow).join(""):`<div class="empty"><b>Belum ada ${cls==="fut"?"posisi":"aset"}</b>Catat pembelian pertamamu, nanti otomatis muncul di sini.<br><button class="btn primary" data-act="new-tx" data-cls="${cls}">+ Tambah transaksi</button></div>`}</div>
@@ -810,6 +817,7 @@ function holdRow(p){
     ["Platform", esc(plats||"—")]
   ];
   if(fut && open) facts.splice(4,0,["Ukuran posisi", usd(p.notional)]);
+  if(p.div>0){ const ri=facts.findIndex(f=>f[0]==="Realized"); facts.splice(ri+1,0,["Dividen diterima", money(p.div,cur)+(open&&p.invested>0?`<br><small class="muted">${nf(0,2).format(p.div/p.invested*100)}% dari modal</small>`:"")]); }
   return `<details class="hold">
     <summary>
       <span class="av" style="--c:${CLS[p.cls].color}">${esc(initials(p.sym))}</span>
@@ -825,13 +833,22 @@ function holdRow(p){
       <div class="hold-actions">
         ${open?`<button class="btn sm" data-act="quick" data-cls="${p.cls}" data-sym="${esc(p.sym)}" data-owner="${esc(p.owner)}" data-side="${p.side||""}" data-dir="sell">${fut?"Tutup posisi":"Jual"}</button>`:""}
         <button class="btn sm" data-act="quick" data-cls="${p.cls}" data-sym="${esc(p.sym)}" data-owner="${esc(p.owner)}" data-side="${p.side||""}" data-dir="buy">${fut?"Tambah posisi":"Beli lagi"}</button>
+        ${open&&(p.cls==="idx"||p.cls==="us")?`<button class="btn sm" data-act="quick" data-cls="${p.cls}" data-sym="${esc(p.sym)}" data-owner="${esc(p.owner)}" data-side="" data-dir="div">Catat dividen</button>`:""}
       </div>
     </div>
   </details>`;
 }
-function txKind(t){ return t.cls==="fut" ? (t.act==="open"?"Buka ":"Tutup ")+(t.side==="long"?"Long":"Short") : (t.act==="buy"?"Beli":"Jual"); }
+function txKind(t){ if(t.act==="div") return "Dividen"; return t.cls==="fut" ? (t.act==="open"?"Buka ":"Tutup ")+(t.side==="long"?"Long":"Short") : (t.act==="buy"?"Beli":"Jual"); }
 function txRow(t, withDel){
   const cur=CLS[t.cls].cur, pnl=C.txPnl[t.id];
+  if(t.act==="div"){
+    const cell=withDel?`<div style="display:flex;gap:2px"><button class="btn sm ghost" data-act="edit-tx" data-id="${t.id}">Ubah</button><button class="btn sm ghost" data-act="del-tx" data-id="${t.id}" aria-label="Hapus transaksi">Hapus</button></div>`:`<div class="c-hide"><span class="pill">${CLS[t.cls].short}</span></div>`;
+    return `<div class="tx">
+    <div><span class="k act-buy">Dividen</span> <b>${esc(t.sym)}</b><small>${fdate(t.date)}, ${esc(t.owner)}${t.platform?" di "+esc(t.platform):""}${t.note?" — "+esc(t.note):""}</small></div>
+    <div class="num c-hide"><b>${t.dps?money(t.dps,cur)+" / lembar":"—"}</b><small>${t.tax?"pajak "+nf(0,1).format(t.tax)+"%":"bersih"}</small></div>
+    <div class="num"><b class="up">${moneyS(t.amt,cur)}</b><small>${cur==="USD"?idrS(toIDR(t.amt,t.cls)):"masuk realized"}</small></div>
+    ${cell}</div>`;
+  }
   const isIn = t.act==="buy"||t.act==="open";
   const qty = t.cls==="idx"?num(t.qty/100,2)+" lot":t.cls==="rdpu"?idr(t.qty*t.price):t.cls==="emas"?num(t.qty,4)+" gram":num(t.qty)+(t.cls==="us"?" lembar":"");
   return `<div class="tx">
@@ -873,18 +890,20 @@ function renderModal(){
 
 /* ================= transaction form ================= */
 const F={cls:"spot",act:"buy",feeTouched:false,lock:false};
-const ACTS={spot:[["buy","Beli"],["sell","Jual"]],idx:[["buy","Beli"],["sell","Jual"]],us:[["buy","Beli"],["sell","Jual"]],emas:[["buy","Beli"],["sell","Jual / buyback"]],rdpu:[["buy","Beli / top up"],["sell","Jual / cairkan"]],
+const ACTS={spot:[["buy","Beli"],["sell","Jual"]],idx:[["buy","Beli"],["sell","Jual"],["div","Dividen"]],us:[["buy","Beli"],["sell","Jual"],["div","Dividen"]],emas:[["buy","Beli"],["sell","Jual / buyback"]],rdpu:[["buy","Beli / top up"],["sell","Jual / cairkan"]],
   fut:[["open-long","Buka Long"],["open-short","Buka Short"],["close-long","Tutup Long"],["close-short","Tutup Short"]]};
 function openTx(pre){
   pre=pre||{}; F.editId=null;
   if(pre.edit){ const t=pre.edit; F.editId=t.id;
-    pre={cls:t.cls, sym:t.sym, owner:t.owner, platform:t.platform||"", lev:t.lev?String(t.lev).replace(".",","):"10", price:pstr(t.price,CLS[t.cls].cur), act: t.cls==="fut"?t.act+"-"+t.side:t.act, date:t.date, note:t.note||"", fee:t.fee?pstr(t.fee,CLS[t.cls].cur):"", qty: t.cls==="idx"?pstr(t.qty/100,"USD"):t.cls==="rdpu"?pstr(Math.round(t.qty*t.price),"IDR"):pstr(t.qty,"USD")};
+    if(t.act==="div") pre={cls:t.cls,sym:t.sym,owner:t.owner,platform:t.platform||"",act:"div",date:t.date,note:t.note||"",divAmt:pstr(t.amt,CLS[t.cls].cur),dps:t.dps?pstr(t.dps,CLS[t.cls].cur):"",tax:t.tax!=null?String(t.tax):""};
+    else pre={cls:t.cls, sym:t.sym, owner:t.owner, platform:t.platform||"", lev:t.lev?String(t.lev).replace(".",","):"10", price:pstr(t.price,CLS[t.cls].cur), act: t.cls==="fut"?t.act+"-"+t.side:t.act, date:t.date, note:t.note||"", fee:t.fee?pstr(t.fee,CLS[t.cls].cur):"", qty: t.cls==="idx"?pstr(t.qty/100,"USD"):t.cls==="rdpu"?pstr(Math.round(t.qty*t.price),"IDR"):pstr(t.qty,"USD")};
   }
-  F.cls=pre.cls||"spot"; F.act=pre.act||ACTS[F.cls][0][0]; F.feeTouched=!!pre.fee;
+  F.cls=pre.cls||"spot"; F.act=pre.act||ACTS[F.cls][0][0]; F.feeTouched=!!pre.fee; F.divTouched=!!pre.divAmt;
   $("txForm").reset(); $("txErr").textContent="";
   $("fDate").value=pre.date||today(); $("fSym").value=pre.sym||""; $("fLev").value=pre.lev||"10";
   $("fPrice").value=pre.price||""; $("fQty").value=pre.qty||""; $("fNote").value=pre.note||""; $("fFee").value=pre.fee||"";
   $("txForm").querySelector('button[type=submit]').textContent = F.editId?"Simpan perubahan":"Simpan";
+  $("fDps").value=pre.dps||""; $("fDiv").value=pre.divAmt||""; $("fTax").value = pre.tax!=null?pre.tax:(F.cls==="idx"?"10":"");
   const last = state.txs.filter(t=>t.cls===F.cls).sort((a,b)=>(b.ts||0)-(a.ts||0))[0];
   $("fOwner").value = pre.owner || (ui.owner!=="all"?ui.owner:(last?last.owner:DEFAULT_OWNER));
   $("fPlat").value = pre.platform!=null ? pre.platform : (last?last.platform:"");
@@ -911,6 +930,42 @@ function vals(){
   let act=F.act, side=null; if(c==="fut"){ side=F.act.endsWith("long")?"long":"short"; act=F.act.startsWith("open")?"open":"close"; }
   return {c, sym:normSym($("fSym").value,c), price, qty, lev:parseNum($("fLev").value)||1, act, side, fee:parseNum($("fFee").value)||0, owner:($("fOwner").value.trim()||DEFAULT_OWNER), plat:$("fPlat").value.trim()};
 }
+function heldAt(c,sym,owner,date){ let q=0; state.txs.forEach(t=>{ if(t.cls===c&&t.sym===sym&&t.owner===owner&&(t.date||"")<=date){ if(t.act==="buy") q+=t.qty; else if(t.act==="sell") q-=t.qty; } }); return Math.max(q,0); }
+function syncDiv(c,cur){
+  const sym=normSym($("fSym").value,c), owner=($("fOwner").value.trim()||DEFAULT_OWNER), date=$("fDate").value||today();
+  const held=sym?heldAt(c,sym,owner,date):0, u=cur==="USD"?"USD":"Rp";
+  $("txSub").textContent="Dividen yang sudah masuk rekening, langsung dihitung sebagai realized";
+  $("lSym").textContent="Kode saham";
+  $("lDps").textContent="Dividen per lembar ("+u+")";
+  $("lDiv").textContent="Total diterima, bersih ("+u+")";
+  $("hDps").textContent=sym?(held>0?"Kamu memegang "+num(held,6)+" lembar pada tanggal ini":"Tidak ada kepemilikan "+sym+" pada tanggal ini"):"Isi kode saham dulu";
+  $("hTax").textContent=c==="idx"?"PPh final dividen saham Indonesia umumnya 10%":"Isi sesuai potongan dari broker, atau kosongkan";
+  const dps=parseNum($("fDps").value), tax=parseNum($("fTax").value)||0;
+  if(!F.divTouched){ if(dps>0&&held>0){ const net=dps*held*(1-tax/100); $("fDiv").value=pstr(+net.toFixed(cur==="IDR"?0:4),cur); } else if(!$("fDps").value.trim()) $("fDiv").value=""; }
+  const amt=parseNum($("fDiv").value), k=state.settings.kurs;
+  const pp=sym?findPos({c,sym,owner}):null;
+  const R=(a,b)=>`<div><span class="muted">${a}</span><span>${b}</span></div>`;
+  let sm="";
+  if(amt>0){ sm+=R("Masuk ke realized",`<b class="up">${moneyS(amt,cur)}</b>${cur==="USD"?" ≈ "+idrS(amt*k):""}`);
+    if(pp&&pp.qty>0&&pp.invested>0) sm+=R("Yield dari modal di posisi",nf(0,2).format(amt/pp.invested*100)+"%"); }
+  $("txSummary").innerHTML=sm||`<span class="muted">Isi dividen per lembar atau total yang diterima.</span>`;
+}
+function submitDiv(){
+  const c=F.cls, err=m=>{$("txErr").textContent=m;};
+  const sym=normSym($("fSym").value,c), owner=($("fOwner").value.trim()||DEFAULT_OWNER), date=$("fDate").value||today(), amt=parseNum($("fDiv").value);
+  if(!sym) return err("Isi kode saham.");
+  if(!(amt>0)) return err("Isi total dividen yang kamu terima (lebih dari 0).");
+  const bought=state.txs.some(t=>t.cls===c&&t.sym===sym&&t.owner===owner&&t.act==="buy"&&(t.date||"")<=date);
+  if(!bought) return err(owner+" belum tercatat membeli "+sym+" sebelum tanggal ini. Catat pembeliannya dulu, atau cek kolom \"Uang siapa\" dan tanggal.");
+  if(demo) endDemo(true);
+  const old=F.editId?state.txs.find(x=>x.id===F.editId):null;
+  const t={id:old?old.id:uid(),ts:old?old.ts:Date.now(),date,cls:c,sym,act:"div",amt,owner,platform:$("fPlat").value.trim()};
+  const dps=parseNum($("fDps").value), tax=parseNum($("fTax").value);
+  if(dps>0) t.dps=dps; if(tax>0) t.tax=tax;
+  const n=$("fNote").value.trim(); if(n) t.note=n;
+  if(old) state.txs[state.txs.indexOf(old)]=t; else state.txs.push(t);
+  persist(); $("txDlg").close(); ui.view=VIEW_OF[c]; render(); toast(old?"Dividen diubah":"Dividen tercatat, masuk ke realized");
+}
 function findPos(v){ let all; if(F.editId){ const keep=state.txs; state.txs=keep.filter(t=>t.id!==F.editId); try{ all=compute("all"); } finally{ state.txs=keep; } } else all=compute("all"); const k=v.c==="fut"?["fut",v.owner,v.sym,v.side].join("|"):[v.c,v.owner,v.sym].join("|"); return all.list.find(p=>p.key===k); }
 function sync(){
   const c=F.cls, cur=CLS[c].cur, fut=c==="fut", sell=F.act==="sell"||F.act.startsWith("close");
@@ -921,6 +976,11 @@ function sync(){
   $("levWrap").style.display = fut&&F.act.startsWith("open")?"":"none";
   $("lFee").textContent = "Fee ("+(cur==="USD"?"USDT":"Rp")+")";
   $("txSub").textContent = {spot:"Beli atau jual koin di pasar spot",fut:"Buka atau tutup posisi futures",idx:"1 lot = 100 lembar",us:"Pecahan lembar boleh, mis. 0,5",emas:"Berat dalam gram, boleh pecahan (mis. 0,5)",rdpu:"Unit dihitung otomatis dari nominal ÷ NAB"}[c];
+  const div=F.act==="div";
+  ["qtyWrap","priceWrap","feeWrap"].forEach(id=>$(id).style.display=div?"none":"");
+  ["dpsWrap","taxWrap","divWrap"].forEach(id=>$(id).style.display=div?"":"none");
+  $("fQty").required=!div; $("fPrice").required=!div;
+  if(div){ syncDiv(c,cur); return; }
   const v=vals(), p = v.sym ? findPos(v) : null;
   if(sell && v.sym){
     const h=p?p.qty:0, hs = c==="idx"?num(h/100,2)+" lot":c==="rdpu"?idr(h*(v.price||p&&p.price||0))+" ("+num(h,4)+" unit)":num(h);
@@ -948,6 +1008,7 @@ function sync(){
 }
 function submitTx(e){
   e.preventDefault();
+  if(F.act==="div") return submitDiv();
   const v=vals(), err=m=>{$("txErr").textContent=m;};
   if(!v.sym) return err("Isi "+$("lSym").textContent.toLowerCase()+".");
   if(!(v.qty>0)) return err("Isi jumlah dengan angka lebih dari 0.");
@@ -1005,12 +1066,13 @@ document.addEventListener("click",e=>{
     return;
   }
   if(a==="new-tx") openTx({cls:b.dataset.cls});
+  else if(a==="new-div") openTx({cls:b.dataset.cls, act:"div"});
   else if(a==="auto") autoPrices(b.dataset.scope);
   else if(a==="fab"){ const v=VIEWS.find(x=>x.id===ui.view); openTx({cls: v&&v.cls ? (ui.view==="crypto"?ui.cryptoMode:v.cls[0]) : "spot"}); }
   else if(a==="edit-tx"){ const t=state.txs.find(x=>x.id===b.dataset.id); if(t) openTx({edit:t}); }
   else if(a==="quick"){
     const c=b.dataset.cls, s=b.dataset.side, sell=b.dataset.dir==="sell", pr=state.prices[pkey(c,b.dataset.sym)];
-    const act = c==="fut" ? (sell?"close-":"open-")+s : (sell?"sell":"buy");
+    const act = c==="fut" ? (sell?"close-":"open-")+s : (b.dataset.dir==="div"?"div":(sell?"sell":"buy"));
     const plat = state.txs.filter(t=>t.cls===c&&t.sym===b.dataset.sym&&t.owner===b.dataset.owner).sort((x,y)=>(y.ts||0)-(x.ts||0))[0];
     openTx({cls:c, sym:b.dataset.sym, owner:b.dataset.owner, act, price:pr?pstr(pr.p,CLS[c].cur):"", platform:plat?plat.platform:""});
   }
@@ -1043,7 +1105,8 @@ $("txForm").addEventListener("change",e=>{
 });
 $("txForm").addEventListener("input",e=>{
   if(e.target.id==="fFee"){ F.feeTouched=e.target.value.trim()!==""; const keep=F.feeTouched; sync(); F.feeTouched=keep; return; }
-  if(["fQty","fPrice","fLev","fSym","fOwner"].includes(e.target.id)) sync();
+  if(e.target.id==="fDiv"){ F.divTouched=e.target.value.trim()!==""; sync(); return; }
+  if(["fQty","fPrice","fLev","fSym","fOwner","fDps","fTax","fDate"].includes(e.target.id)) sync();
 });
 $("txForm").addEventListener("submit",submitTx);
 document.addEventListener("submit",e=>{
@@ -1086,7 +1149,7 @@ async function save(filename,data){
 function exportCSV(){
   const all=compute("all");
   const head=["tanggal","kelas","aset","jenis","jumlah","harga","fee","leverage","mata_uang","realized","uang_siapa","platform","catatan"];
-  const rows=state.txs.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(t=>[t.date,CLS[t.cls].name,t.sym,txKind(t),t.qty,t.price,t.fee||0,t.lev||"",CLS[t.cls].cur,all.txPnl[t.id]==null?"":all.txPnl[t.id].toFixed(4),t.owner,t.platform||"",t.note||""]);
+  const rows=state.txs.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(t=>[t.date,CLS[t.cls].name,t.sym,txKind(t),t.qty??"",t.price??"",t.fee||0,t.lev||"",CLS[t.cls].cur,all.txPnl[t.id]==null?"":all.txPnl[t.id].toFixed(4),t.owner,t.platform||"",t.note||""]);
   const csv=[head].concat(rows).map(r=>r.map(x=>{ const s=String(x); return /[",\n;]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; }).join(",")).join("\n");
   save("transaksi-"+today()+".csv","\ufeff"+csv);
 }
@@ -1105,7 +1168,7 @@ function startDemo(){
     T(5,"fut","SOLUSDT","open",20,140,1.4,"Saya","Bybit",{side:"long",lev:5}), T(2,"fut","SOLUSDT","close",10,153,0.77,"Saya","Bybit",{side:"long"}),
     T(6,"fut","BTCUSDT","open",0.01,68000,0.34,"Saya","Binance",{side:"short",lev:10}), T(4,"fut","BTCUSDT","close",0.01,69200,0.35,"Saya","Binance",{side:"short"}),
     T(8,"idx","BBCA","buy",1000,9800,14700,"Ibu","Stockbit"), T(6,"idx","TLKM","buy",2000,3100,9300,"Saya","Ajaib"), T(1,"idx","TLKM","sell",1000,3320,8300,"Saya","Ajaib"), T(5,"idx","BBRI","buy",1500,4250,9560,"Ibu","Stockbit"),
-    T(7,"us","AAPL","buy",5,190,0,"Saya","Gotrade"), T(3,"us","NVDA","buy",4,110,0,"Saya","Gotrade"),
+    T(7,"us","AAPL","buy",5,190,0,"Saya","Gotrade"), T(3,"us","NVDA","buy",4,110,0,"Saya","Gotrade"), T(2,"idx","BBCA","div",0,0,0,"Ibu","Stockbit",{amt:225000,dps:250,tax:10}), T(1,"us","AAPL","div",0,0,0,"Saya","Gotrade",{amt:1.06,dps:0.25,tax:15}),
     T(7,"emas","Antam","buy",5,1365000,0,"Ibu","Antam (Logam Mulia)"), T(2,"emas","Emas Pegadaian","buy",2.5,1410000,0,"Saya","Pegadaian"),
     T(8,"rdpu","Sucorinvest Money Market","buy",10000000/1800,1800,0,"Ibu","Bibit"), T(4,"rdpu","Sucorinvest Money Market","buy",3000000/1806,1806,0,"Saya","Bibit")
   ];
